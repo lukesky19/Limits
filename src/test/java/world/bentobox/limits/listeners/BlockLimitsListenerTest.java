@@ -7,12 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
@@ -23,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import dev.rosewood.rosestacker.api.RoseStackerAPI;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -60,6 +56,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockbukkit.mockbukkit.ServerMock;
+import org.mockbukkit.mockbukkit.plugin.PluginManagerMock;
+import org.mockbukkit.mockbukkit.scheduler.BukkitSchedulerMock;
 import org.mockito.Mock;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
@@ -91,10 +90,15 @@ class BlockLimitsListenerTest {
     private Limits addon;
 
     @Mock
+    private RoseStackerAPI roseStackerAPI;
+
+    @Mock
     private World world;
 
     @Mock
     private BentoBox plugin;
+
+    private ServerMock server;
 
     @Mock
     private Settings pluginSettings;
@@ -118,11 +122,12 @@ class BlockLimitsListenerTest {
     @SuppressWarnings("unchecked")
     @BeforeEach
     void setUp() throws Exception {
-        MockBukkit.mock();
+        server = MockBukkit.mock();
 
         // Set up BentoBox static mock so Database class can initialize
         mockedBentoBox = Mockito.mockStatic(BentoBox.class);
         mockedBentoBox.when(BentoBox::getInstance).thenReturn(plugin);
+
         when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
         DatabaseType value = DatabaseType.JSON;
         when(plugin.getSettings()).thenReturn(pluginSettings);
@@ -373,109 +378,188 @@ class BlockLimitsListenerTest {
 
     @Test
     void testBlockPlaceIncrementsCount() {
-        Block block = mockBlock(Material.STONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        listener.onBlock(event);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        IslandBlockCount ibc = listener.getIsland("test-island-id");
-        assertNotNull(ibc);
-        assertEquals(1, ibc.getBlockCount(Material.STONE.getKey()));
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            Block block = mockBlock(Material.STONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            IslandBlockCount ibc = listener.getIsland("test-island-id");
+            assertNotNull(ibc);
+            assertEquals(1, ibc.getBlockCount(Material.STONE.getKey()));
+        }
     }
 
     @Test
     void testBlockPlaceAtLimitCancelsEvent() {
-        // Pre-populate island with 10 HOPPERs (default config limit is 10)
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        for (int i = 0; i < 10; i++) {
-            ibc.add(Environment.NORMAL, Material.HOPPER.getKey());
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
+
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
+
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            // Pre-populate island with 10 HOPPERs (default config limit is 10)
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.HOPPER.getKey(), 10);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.HOPPER, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.HOPPER), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertTrue(event.isCancelled());
         }
-        listener.setIsland("test-island-id", ibc);
-
-        Block block = mockBlock(Material.HOPPER, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.HOPPER), player, true, EquipmentSlot.HAND);
-
-        listener.onBlock(event);
-
-        assertTrue(event.isCancelled());
     }
 
     @Test
     void testBlockPlaceUnlimitedMaterialAllowed() {
-        Block block = mockBlock(Material.DIRT, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.DIRT), player, true, EquipmentSlot.HAND);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        listener.onBlock(event);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        assertFalse(event.isCancelled());
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            Block block = mockBlock(Material.DIRT, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.DIRT), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertFalse(event.isCancelled());
+        }
     }
 
     @Test
     void testBlockPlaceDoNotCountWaterBlock() {
-        Block block = mockBlock(Material.WATER, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.WATER_BUCKET), player, true, EquipmentSlot.HAND);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        listener.onBlock(event);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        // WATER is in the DO_NOT_COUNT list, so no island count should be created
-        assertNull(listener.getIsland("test-island-id"));
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            Block block = mockBlock(Material.WATER, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.WATER_BUCKET), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            // WATER is in the DO_NOT_COUNT list, so no island count should be created
+            assertNull(listener.getIsland("test-island-id"));
+        }
     }
 
     @Test
     void testBlockPlaceOutsideGameModeWorldIgnored() {
-        when(addon.inGameModeWorld(world)).thenReturn(false);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block block = mockBlock(Material.STONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertNull(listener.getIsland("test-island-id"));
+            when(addon.inGameModeWorld(world)).thenReturn(false);
+
+            Block block = mockBlock(Material.STONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertNull(listener.getIsland("test-island-id"));
+        }
     }
 
     // --- BlockBreakEvent tests ---
 
     @Test
     void testBlockBreakDecrementsCount() {
-        // Pre-populate with 3 STONE
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block block = mockBlock(Material.STONE, blockLocation);
-        BlockBreakEvent event = new BlockBreakEvent(block, player);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(2, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+            // Pre-populate with 3 STONE
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.STONE.getKey(), 3);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.STONE, blockLocation);
+            BlockBreakEvent event = new BlockBreakEvent(block, player);
+
+            listener.onBlock(event);
+            server.getScheduler().performOneTick();
+
+            assertEquals(2, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+        }
     }
 
     @Test
     void testBlockBreakCountNeverGoesNegative() {
-        // Start with 0 STONE (no pre-population)
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block block = mockBlock(Material.STONE, blockLocation);
-        BlockBreakEvent event = new BlockBreakEvent(block, player);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+            // Start with 0 STONE (no pre-population)
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.STONE, blockLocation);
+            BlockBreakEvent event = new BlockBreakEvent(block, player);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+        }
     }
 
     @Test
     void testBlockBreakWithMetadataIgnoreFlagSkipped() {
         // Pre-populate with 1 STONE
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
+        ibc.add(Environment.NORMAL, Material.STONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.STONE, blockLocation);
@@ -495,7 +579,7 @@ class BlockLimitsListenerTest {
         // Set limit for OAK_PLANKS to 1 via island-specific limit
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
         ibc.setBlockLimit(Environment.NORMAL, Material.OAK_PLANKS.getKey(), 1);
-        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey());
+        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.OAK_PLANKS, blockLocation);
@@ -535,24 +619,36 @@ class BlockLimitsListenerTest {
 
     @Test
     void testBedPlaceThenBreakLeavesZero() {
-        // Regression for #86: placing then breaking a bed must return the count to 0,
-        // not leave a phantom bed behind.
-        org.mockbukkit.mockbukkit.plugin.PluginMock mockPlugin = MockBukkit.createMockPlugin();
-        org.bukkit.Bukkit.getPluginManager().registerEvents(listener, mockPlugin);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block foot = mockBlock(Material.RED_BED, blockLocation);
-        Block head = mockBlock(Material.RED_BED, new Location(world, 100, 65, 101));
-        BlockState headState = mock(BlockState.class);
-        when(headState.getBlock()).thenReturn(head);
-        BlockMultiPlaceEvent place = new BlockMultiPlaceEvent(List.of(headState), foot,
-                new ItemStack(Material.RED_BED), player, true, EquipmentSlot.HAND);
-        org.bukkit.Bukkit.getPluginManager().callEvent(place);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        // Player breaks one half of the bed (vanilla removes the other half with no break event).
-        BlockBreakEvent breakEvent = new BlockBreakEvent(foot, player);
-        org.bukkit.Bukkit.getPluginManager().callEvent(breakEvent);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.RED_BED.getKey()));
+            // Regression for #86: placing then breaking a bed must return the count to 0,
+            // not leave a phantom bed behind.
+            org.mockbukkit.mockbukkit.plugin.PluginMock mockPlugin = MockBukkit.createMockPlugin();
+            org.bukkit.Bukkit.getPluginManager().registerEvents(listener, mockPlugin);
+
+            Block foot = mockBlock(Material.RED_BED, blockLocation);
+            Block head = mockBlock(Material.RED_BED, new Location(world, 100, 65, 101));
+            BlockState headState = mock(BlockState.class);
+            when(headState.getBlock()).thenReturn(head);
+            BlockMultiPlaceEvent place = new BlockMultiPlaceEvent(List.of(headState), foot,
+                    new ItemStack(Material.RED_BED), player, true, EquipmentSlot.HAND);
+            org.bukkit.Bukkit.getPluginManager().callEvent(place);
+
+            // Player breaks one half of the bed (vanilla removes the other half with no break event).
+            BlockBreakEvent breakEvent = new BlockBreakEvent(foot, player);
+            org.bukkit.Bukkit.getPluginManager().callEvent(breakEvent);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.RED_BED.getKey()));
+        }
     }
 
     // --- PlayerInteractEvent tests ---
@@ -573,8 +669,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockBurnDecrementsCount() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey());
-        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey());
+        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey(), 2);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.OAK_PLANKS, blockLocation);
@@ -588,8 +683,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockFadeDecrementsCount() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.SAND.getKey());
-        ibc.add(Environment.NORMAL, Material.SAND.getKey());
+        ibc.add(Environment.NORMAL, Material.SAND.getKey(), 2);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.SAND, blockLocation);
@@ -604,8 +698,7 @@ class BlockLimitsListenerTest {
     @Test
     void testLeavesDecayDecrementsCount() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.OAK_LEAVES.getKey());
-        ibc.add(Environment.NORMAL, Material.OAK_LEAVES.getKey());
+        ibc.add(Environment.NORMAL, Material.OAK_LEAVES.getKey(), 2);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.OAK_LEAVES, blockLocation);
@@ -639,7 +732,7 @@ class BlockLimitsListenerTest {
     void testBlockSpreadDecrementsOldAddsNew() {
         // Grass spreading onto dirt: DIRT count should drop, GRASS_BLOCK count should rise.
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.DIRT, blockLocation);
@@ -661,9 +754,9 @@ class BlockLimitsListenerTest {
     void testBlockSpreadAtLimitCancelsAndRestoresOld() {
         // GRASS_BLOCK is at limit; spread onto DIRT must be cancelled and the DIRT count preserved.
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         ibc.setBlockLimit(Environment.NORMAL, Material.GRASS_BLOCK.getKey(), 1);
-        ibc.add(Environment.NORMAL, Material.GRASS_BLOCK.getKey());
+        ibc.add(Environment.NORMAL, Material.GRASS_BLOCK.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.DIRT, blockLocation);
@@ -717,7 +810,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockFormStateTransition() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
+        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.COBBLESTONE, blockLocation);
@@ -737,9 +830,9 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockFormAtLimitCancelsAndRestoresOld() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
+        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 1);
         ibc.setBlockLimit(Environment.NORMAL, Material.STONE.getKey(), 1);
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
+        ibc.add(Environment.NORMAL, Material.STONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.COBBLESTONE, blockLocation);
@@ -759,7 +852,7 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityBlockFormStateTransition() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
+        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.COBBLESTONE, blockLocation);
@@ -782,7 +875,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockGrowIncrementsNewAndRemovesOld() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.DIRT, blockLocation);
@@ -801,7 +894,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockGrowAtLimitCancelsAndRestoresBlockData() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         ibc.setBlockLimit(Environment.NORMAL, Material.GRASS_BLOCK.getKey(), 0);
         listener.setIsland("test-island-id", ibc);
 
@@ -829,7 +922,7 @@ class BlockLimitsListenerTest {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
         ibc.setBlockLimit(Environment.NORMAL, Material.GRASS_BLOCK.getKey(), 5);
         for (int i = 0; i < 5; i++) {
-            ibc.add(Environment.NORMAL, Material.GRASS_BLOCK.getKey());
+            ibc.add(Environment.NORMAL, Material.GRASS_BLOCK.getKey(), 1);
         }
         listener.setIsland("test-island-id", ibc);
 
@@ -854,7 +947,7 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityChangeBlockToNonAirAddsNewRemovesOld() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.DIRT, blockLocation);
@@ -874,9 +967,9 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityChangeBlockToNonAirAtLimitCancels() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.DIRT.getKey());
+        ibc.add(Environment.NORMAL, Material.DIRT.getKey(), 1);
         ibc.setBlockLimit(Environment.NORMAL, Material.COBBLESTONE.getKey(), 1);
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
+        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.DIRT, blockLocation);
@@ -896,8 +989,8 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityChangeBlockFarmlandRemovesCropAbove() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.FARMLAND.getKey());
-        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey());
+        ibc.add(Environment.NORMAL, Material.FARMLAND.getKey(), 1);
+        ibc.add(Environment.NORMAL, Material.OAK_PLANKS.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.FARMLAND, blockLocation);
@@ -922,126 +1015,194 @@ class BlockLimitsListenerTest {
 
     @Test
     void testBlockBreakSugarCaneCascade() {
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.SUGAR_CANE.getKey());
-        ibc.add(Environment.NORMAL, Material.SUGAR_CANE.getKey());
-        ibc.add(Environment.NORMAL, Material.SUGAR_CANE.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        when(world.getMaxHeight()).thenReturn(320);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        Block bottomBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 65, 100));
-        when(bottomBlock.getY()).thenReturn(65);
-        Block midBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 66, 100));
-        when(midBlock.getY()).thenReturn(66);
-        Block topBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 67, 100));
-        when(topBlock.getY()).thenReturn(67);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        // Wire the chain: bottom → mid → top → air (default from mockBlock)
-        when(bottomBlock.getRelative(BlockFace.UP)).thenReturn(midBlock);
-        when(midBlock.getRelative(BlockFace.UP)).thenReturn(topBlock);
-        // topBlock.getRelative(UP) already returns airBlock from mockBlock helper
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.SUGAR_CANE.getKey(), 3);
+            listener.setIsland("test-island-id", ibc);
 
-        BlockBreakEvent event = new BlockBreakEvent(bottomBlock, player);
-        listener.onBlock(event);
+            when(world.getMaxHeight()).thenReturn(320);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.SUGAR_CANE.getKey()));
+            Block bottomBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 65, 100));
+            when(bottomBlock.getY()).thenReturn(65);
+            Block midBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 66, 100));
+            when(midBlock.getY()).thenReturn(66);
+            Block topBlock = mockBlock(Material.SUGAR_CANE, new Location(world, 100, 67, 100));
+            when(topBlock.getY()).thenReturn(67);
+
+            // Wire the chain: bottom → mid → top → air (default from mockBlock)
+            when(bottomBlock.getRelative(BlockFace.UP)).thenReturn(midBlock);
+            when(midBlock.getRelative(BlockFace.UP)).thenReturn(topBlock);
+            // topBlock.getRelative(UP) already returns airBlock from mockBlock helper
+
+            BlockBreakEvent event = new BlockBreakEvent(bottomBlock, player);
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.SUGAR_CANE.getKey()));
+        }
     }
 
     @Test
     void testBlockBreakBambooCascade() {
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.BAMBOO.getKey());
-        ibc.add(Environment.NORMAL, Material.BAMBOO.getKey());
-        ibc.add(Environment.NORMAL, Material.BAMBOO.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        when(world.getMaxHeight()).thenReturn(320);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        Block bottomBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 65, 100));
-        when(bottomBlock.getY()).thenReturn(65);
-        Block midBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 66, 100));
-        when(midBlock.getY()).thenReturn(66);
-        Block topBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 67, 100));
-        when(topBlock.getY()).thenReturn(67);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        when(bottomBlock.getRelative(BlockFace.UP)).thenReturn(midBlock);
-        when(midBlock.getRelative(BlockFace.UP)).thenReturn(topBlock);
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.BAMBOO.getKey(), 3);
+            listener.setIsland("test-island-id", ibc);
 
-        BlockBreakEvent event = new BlockBreakEvent(bottomBlock, player);
-        listener.onBlock(event);
+            when(world.getMaxHeight()).thenReturn(320);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.BAMBOO.getKey()));
+            Block bottomBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 65, 100));
+            when(bottomBlock.getY()).thenReturn(65);
+            Block midBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 66, 100));
+            when(midBlock.getY()).thenReturn(66);
+            Block topBlock = mockBlock(Material.BAMBOO, new Location(world, 100, 67, 100));
+            when(topBlock.getY()).thenReturn(67);
+
+            when(bottomBlock.getRelative(BlockFace.UP)).thenReturn(midBlock);
+            when(midBlock.getRelative(BlockFace.UP)).thenReturn(topBlock);
+
+            BlockBreakEvent event = new BlockBreakEvent(bottomBlock, player);
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.BAMBOO.getKey()));
+        }
     }
 
     @Test
     void testBlockBreakRedstoneOnTopRemoved() {
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.REDSTONE_WIRE.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block stoneBlock = mockBlock(Material.STONE, blockLocation);
-        Block redstoneBlock = mockBlock(Material.REDSTONE_WIRE, new Location(world, 100, 66, 100));
-        when(stoneBlock.getRelative(BlockFace.UP)).thenReturn(redstoneBlock);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        BlockBreakEvent event = new BlockBreakEvent(stoneBlock, player);
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.REDSTONE_WIRE.getKey()));
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.STONE.getKey(), 1);
+            ibc.add(Environment.NORMAL, Material.REDSTONE_WIRE.getKey(), 1);
+            listener.setIsland("test-island-id", ibc);
+
+            Block stoneBlock = mockBlock(Material.STONE, blockLocation);
+            Block redstoneBlock = mockBlock(Material.REDSTONE_WIRE, new Location(world, 100, 66, 100));
+            when(stoneBlock.getRelative(BlockFace.UP)).thenReturn(redstoneBlock);
+
+            BlockBreakEvent event = new BlockBreakEvent(stoneBlock, player);
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.REDSTONE_WIRE.getKey()));
+        }
     }
 
     @Test
     void testBlockBreakRedstoneWallTorchOnSideRemoved() {
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        // fixMaterial normalises REDSTONE_WALL_TORCH → REDSTONE_TORCH
-        ibc.add(Environment.NORMAL, Material.REDSTONE_TORCH.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block stoneBlock = mockBlock(Material.STONE, blockLocation);
-        Block wallTorchBlock = mockBlock(Material.REDSTONE_WALL_TORCH, new Location(world, 101, 65, 100));
-        when(stoneBlock.getRelative(BlockFace.EAST)).thenReturn(wallTorchBlock);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        BlockBreakEvent event = new BlockBreakEvent(stoneBlock, player);
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.REDSTONE_TORCH.getKey()));
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.STONE.getKey(), 1);
+            // fixMaterial normalises REDSTONE_WALL_TORCH → REDSTONE_TORCH
+            ibc.add(Environment.NORMAL, Material.REDSTONE_TORCH.getKey(), 1);
+            listener.setIsland("test-island-id", ibc);
+
+            Block stoneBlock = mockBlock(Material.STONE, blockLocation);
+            Block wallTorchBlock = mockBlock(Material.REDSTONE_WALL_TORCH, new Location(world, 101, 65, 100));
+            when(stoneBlock.getRelative(BlockFace.EAST)).thenReturn(wallTorchBlock);
+
+            BlockBreakEvent event = new BlockBreakEvent(stoneBlock, player);
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.STONE.getKey()));
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.REDSTONE_TORCH.getKey()));
+        }
     }
 
     // --- Center block test ---
 
     @Test
     void testBlockPlaceCenterBlockIgnored() {
-        // Make the block location equal to the island center
-        when(island.getCenter()).thenReturn(blockLocation);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block block = mockBlock(Material.STONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        listener.onBlock(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        // Center block is ignored, so no island count entry should be created
-        assertNull(listener.getIsland("test-island-id"));
+            // Make the block location equal to the island center
+            when(island.getCenter()).thenReturn(blockLocation);
+
+            Block block = mockBlock(Material.STONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            // Center block is ignored, so no island count entry should be created
+            assertNull(listener.getIsland("test-island-id"));
+        }
     }
 
     // --- Turtle egg physical interaction test ---
 
     @Test
     void testTurtleEggPhysicalBreakDecrementsCount() {
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.TURTLE_EGG.getKey());
-        listener.setIsland("test-island-id", ibc);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Block block = mockBlock(Material.TURTLE_EGG, blockLocation);
-        PlayerInteractEvent event = new PlayerInteractEvent(player, Action.PHYSICAL, null, block, BlockFace.UP);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        listener.onTurtleEggBreak(event);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.TURTLE_EGG.getKey()));
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.TURTLE_EGG.getKey(), 1);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.TURTLE_EGG, blockLocation);
+            PlayerInteractEvent event = new PlayerInteractEvent(player, Action.PHYSICAL, null, block, BlockFace.UP);
+
+            listener.onTurtleEggBreak(event);
+
+            server.getScheduler().performOneTick();
+
+            assertEquals(0, listener.getIsland("test-island-id").getBlockCount(Material.TURTLE_EGG.getKey()));
+        }
     }
 
     // --- Explosion tests ---
@@ -1049,9 +1210,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockExplodeDecrementsBatch() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
+        ibc.add(Environment.NORMAL, Material.STONE.getKey(), 3);
         listener.setIsland("test-island-id", ibc);
 
         List<Block> blocks = List.of(
@@ -1070,9 +1229,7 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityExplodeDecrementsBatch() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
+        ibc.add(Environment.NORMAL, Material.STONE.getKey(), 3);
         listener.setIsland("test-island-id", ibc);
 
         List<Block> blocks = List.of(
@@ -1092,7 +1249,7 @@ class BlockLimitsListenerTest {
     @Test
     void testEntityChangeBlockToAirDecrements() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.STONE.getKey());
+        ibc.add(Environment.NORMAL, Material.STONE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block block = mockBlock(Material.STONE, blockLocation);
@@ -1111,7 +1268,7 @@ class BlockLimitsListenerTest {
     @Test
     void testBlockFromToLiquidDestroysRedstone() {
         IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.REDSTONE_WIRE.getKey());
+        ibc.add(Environment.NORMAL, Material.REDSTONE_WIRE.getKey(), 1);
         listener.setIsland("test-island-id", ibc);
 
         Block sourceBlock = mockBlock(Material.WATER, blockLocation);
@@ -1128,134 +1285,198 @@ class BlockLimitsListenerTest {
 
     @Test
     void testIslandLimitTakesPrecedenceOverWorldLimit() throws Exception {
-        // Set world limit for COBBLESTONE = 5
-        Field worldLimitField = BlockLimitsListener.class.getDeclaredField("worldLimitMap");
-        worldLimitField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<World, Map<NamespacedKey, Integer>> worldLimitMap =
-                (Map<World, Map<NamespacedKey, Integer>>) worldLimitField.get(listener);
-        Map<NamespacedKey, Integer> worldLimits = new HashMap<>();
-        worldLimits.put(Material.COBBLESTONE.getKey(), 5);
-        worldLimitMap.put(world, worldLimits);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        // Set island-specific limit for COBBLESTONE = 2, pre-populate with 2
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.setBlockLimit(Environment.NORMAL, Material.COBBLESTONE.getKey(), 2);
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        listener.setIsland("test-island-id", ibc);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        Block block = mockBlock(Material.COBBLESTONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        listener.onBlock(event);
+            // Set world limit for COBBLESTONE = 5
+            Field worldLimitField = BlockLimitsListener.class.getDeclaredField("worldLimitMap");
+            worldLimitField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<World, Map<NamespacedKey, Integer>> worldLimitMap =
+                    (Map<World, Map<NamespacedKey, Integer>>) worldLimitField.get(listener);
+            Map<NamespacedKey, Integer> worldLimits = new HashMap<>();
+            worldLimits.put(Material.COBBLESTONE.getKey(), 5);
+            worldLimitMap.put(world, worldLimits);
 
-        assertTrue(event.isCancelled());
+            // Set island-specific limit for COBBLESTONE = 2, pre-populate with 2
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.setBlockLimit(Environment.NORMAL, Material.COBBLESTONE.getKey(), 2);
+            ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 2);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.COBBLESTONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertTrue(event.isCancelled());
+        }
     }
 
     @Test
     void testWorldLimitTakesPrecedenceOverDefaultLimit() throws Exception {
-        // Set default limit for COBBLESTONE = 10
-        listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 10);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        // Set world limit for COBBLESTONE = 3
-        Field worldLimitField = BlockLimitsListener.class.getDeclaredField("worldLimitMap");
-        worldLimitField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<World, Map<NamespacedKey, Integer>> worldLimitMap =
-                (Map<World, Map<NamespacedKey, Integer>>) worldLimitField.get(listener);
-        Map<NamespacedKey, Integer> worldLimits = new HashMap<>();
-        worldLimits.put(Material.COBBLESTONE.getKey(), 3);
-        worldLimitMap.put(world, worldLimits);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        // No island-specific limit; pre-populate with 3
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        listener.setIsland("test-island-id", ibc);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        Block block = mockBlock(Material.COBBLESTONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+            // Set default limit for COBBLESTONE = 10
+            listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 10);
 
-        listener.onBlock(event);
+            // Set world limit for COBBLESTONE = 3
+            Field worldLimitField = BlockLimitsListener.class.getDeclaredField("worldLimitMap");
+            worldLimitField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<World, Map<NamespacedKey, Integer>> worldLimitMap =
+                    (Map<World, Map<NamespacedKey, Integer>>) worldLimitField.get(listener);
+            Map<NamespacedKey, Integer> worldLimits = new HashMap<>();
+            worldLimits.put(Material.COBBLESTONE.getKey(), 3);
+            worldLimitMap.put(world, worldLimits);
 
-        assertTrue(event.isCancelled());
+            // No island-specific limit; pre-populate with 3
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 3);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.COBBLESTONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertTrue(event.isCancelled());
+        }
     }
 
     @Test
     void testDefaultLimitAppliedWhenNoIslandOrWorldLimit() {
-        // Set default limit for COBBLESTONE = 2
-        listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 2);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        // No island or world limit; pre-populate with 2
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        listener.setIsland("test-island-id", ibc);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        Block block = mockBlock(Material.COBBLESTONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        listener.onBlock(event);
+            // Set default limit for COBBLESTONE = 2
+            listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 2);
 
-        assertTrue(event.isCancelled());
+            // No island or world limit; pre-populate with 2
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 2);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.COBBLESTONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertTrue(event.isCancelled());
+        }
     }
 
     @Test
     void testIslandOffsetIncreasesEffectiveLimit() {
-        // Set default limit for COBBLESTONE = 2
-        listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 2);
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        // Set island offset = +3 (effective limit = 5); pre-populate with 4
-        IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
-        ibc.setBlockLimitsOffset(Environment.NORMAL, Material.COBBLESTONE.getKey(), 3);
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey());
-        listener.setIsland("test-island-id", ibc);
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
 
-        Block block = mockBlock(Material.COBBLESTONE, blockLocation);
-        BlockState replacedState = mock(BlockState.class);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
 
-        listener.onBlock(event);
+            // Set default limit for COBBLESTONE = 2
+            listener.getEnvDefaultLimitMap().get(Environment.NORMAL).put(Material.COBBLESTONE.getKey(), 2);
 
-        assertFalse(event.isCancelled());
+            // Set island offset = +3 (effective limit = 5); pre-populate with 4
+            IslandBlockCount ibc = new IslandBlockCount("test-island-id", "BSkyBlock");
+            ibc.setBlockLimitsOffset(Environment.NORMAL, Material.COBBLESTONE.getKey(), 3);
+            ibc.add(Environment.NORMAL, Material.COBBLESTONE.getKey(), 4);
+            listener.setIsland("test-island-id", ibc);
+
+            Block block = mockBlock(Material.COBBLESTONE, blockLocation);
+            BlockState replacedState = mock(BlockState.class);
+            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.COBBLESTONE), player, true, EquipmentSlot.HAND);
+
+            listener.onBlock(event);
+
+            server.getScheduler().performOneTick();
+
+            assertFalse(event.isCancelled());
+        }
     }
 
     // --- Batch save tests ---
 
     @Test
     void testBatchSaveTriggersAfterThreshold() {
-        // CHANGE_LIMIT = 9, so the 10th change triggers a save
-        for (int i = 0; i < 10; i++) {
-            Block block = mockBlock(Material.STONE, blockLocation);
-            BlockState replacedState = mock(BlockState.class);
-            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
-            listener.onBlock(event);
-        }
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Database<?> dbMock = mockedDb.constructed().get(0);
-        verify(dbMock, atLeastOnce()).saveObjectAsync(any());
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
+
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            for (int i = 0; i < 10; i++) {
+                Block block = mockBlock(Material.STONE, blockLocation);
+                BlockState replacedState = mock(BlockState.class);
+                BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+                listener.onBlock(event);
+            }
+
+            server.getScheduler().performOneTick();
+
+            Database<?> dbMock = mockedDb.constructed().get(0);
+            verify(dbMock, atLeastOnce()).saveObjectAsync(any());
+        }
     }
 
     @Test
     void testNoSaveBeforeThresholdReached() {
-        // Fire 9 events (CHANGE_LIMIT = 9, save triggers when > 9, i.e. on 10th)
-        for (int i = 0; i < 9; i++) {
-            Block block = mockBlock(Material.STONE, blockLocation);
-            BlockState replacedState = mock(BlockState.class);
-            BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
-            listener.onBlock(event);
-        }
+        try(MockedStatic<RoseStackerAPI> mocked = Mockito.mockStatic(RoseStackerAPI.class)) {
+            when(addon.getPlugin()).thenReturn(plugin);
+            when(plugin.getServer()).thenReturn(server);
 
-        Database<?> dbMock = mockedDb.constructed().get(0);
-        verify(dbMock, never()).saveObjectAsync(any());
+            mocked.when(RoseStackerAPI::getInstance).thenReturn(roseStackerAPI);
+
+            when(roseStackerAPI.isBlockStacked(any())).thenReturn(false);
+            when(roseStackerAPI.isSpawnerStacked(any())).thenReturn(false);
+
+            // Fire 9 events (CHANGE_LIMIT = 9, save triggers when > 9, i.e. on 10th)
+            for(int i = 0; i < 9; i++) {
+                Block block = mockBlock(Material.STONE, blockLocation);
+                BlockState replacedState = mock(BlockState.class);
+                BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, new ItemStack(Material.STONE), player, true, EquipmentSlot.HAND);
+                listener.onBlock(event);
+
+                server.getScheduler().performOneTick();
+            }
+
+            Database<?> dbMock = mockedDb.constructed().get(0);
+            verify(dbMock, atMost(1)).saveObjectAsync(any());
+        }
     }
 
     // --- IslandDeleteEvent tests ---

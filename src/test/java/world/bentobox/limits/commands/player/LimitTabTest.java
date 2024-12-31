@@ -125,8 +125,8 @@ class LimitTabTest {
         IslandBlockCount ibc = new IslandBlockCount("island", "BSkyBlock");
         NamespacedKey hopper = Material.HOPPER.getKey();
         // Place 3 hoppers in the overworld and 7 in the nether.
-        for (int i = 0; i < 3; i++) ibc.add(Environment.NORMAL, hopper);
-        for (int i = 0; i < 7; i++) ibc.add(Environment.NETHER, hopper);
+        ibc.add(Environment.NORMAL, hopper, 3);
+        ibc.add(Environment.NETHER, hopper, 7);
 
         Map<NamespacedKey, Integer> matLimits = Map.of(hopper, 10);
 

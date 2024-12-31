@@ -174,15 +174,15 @@ public class IslandBlockCount implements DataObject {
         return total;
     }
 
-    public void add(Environment env, NamespacedKey material) {
-        getBlockCounts(env).merge(material, 1, Integer::sum);
+    public void add(Environment env, NamespacedKey material, int amount) {
+        getBlockCounts(env).merge(material, amount, Integer::sum);
         setChanged();
     }
 
-    public void remove(Environment env, NamespacedKey material) {
+    public void remove(Environment env, NamespacedKey material, int amount) {
         Map<NamespacedKey, Integer> m = getBlockCounts(env);
         if (m.containsKey(material)) {
-            m.computeIfPresent(material, (k, count) -> count - 1 > 0 ? count - 1 : null);
+            m.computeIfPresent(material, (k, count) -> count - amount > 0 ? count - amount : null);
             setChanged();
         }
     }

@@ -2,6 +2,7 @@ name: BentoBox-Limits
 main: world.bentobox.limits.LimitsPladdon
 version: ${project.version}${build.number}
 api-version: "1.21"
+softdepend: [RoseStacker]
 
 authors: [tastybento]
 contributors: ["The BentoBoxWorld Community"]

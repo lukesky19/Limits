@@ -43,22 +43,21 @@ class IslandBlockCountTest {
 
     @Test
     void testAddIncrementsCount() {
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 1);
         assertEquals(1, ibc.getBlockCount(stoneKey));
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 1);
         assertEquals(2, ibc.getBlockCount(stoneKey));
     }
 
     @Test
     void testRemoveDecrementsAndRemovesAtZero() {
-        ibc.add(Environment.NORMAL, stoneKey);
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 2);
         assertEquals(2, ibc.getBlockCount(stoneKey));
 
-        ibc.remove(Environment.NORMAL, stoneKey);
+        ibc.remove(Environment.NORMAL, stoneKey, 1);
         assertEquals(1, ibc.getBlockCount(stoneKey));
 
-        ibc.remove(Environment.NORMAL, stoneKey);
+        ibc.remove(Environment.NORMAL, stoneKey, 1);
         // At 0 the entry should be removed entirely
         assertEquals(0, ibc.getBlockCount(stoneKey));
         assertFalse(ibc.getBlockCounts(Environment.NORMAL).containsKey(stoneKey));
@@ -88,15 +87,14 @@ class IslandBlockCountTest {
     @Test
     void testIsAtLimitCountBelowLimit() {
         ibc.setBlockLimit(Environment.NORMAL, stoneKey, 10);
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 1);
         assertFalse(ibc.isAtLimit(Environment.NORMAL, stoneKey));
     }
 
     @Test
     void testIsAtLimitCountAtLimit() {
         ibc.setBlockLimit(Environment.NORMAL, stoneKey, 2);
-        ibc.add(Environment.NORMAL, stoneKey);
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 2);
         assertTrue(ibc.isAtLimit(Environment.NORMAL, stoneKey));
     }
 
@@ -105,18 +103,14 @@ class IslandBlockCountTest {
         // count=10, limit=10, offset=5 → effective limit is 15, so NOT at limit
         ibc.setBlockLimit(Environment.NORMAL, stoneKey, 10);
         ibc.setBlockLimitsOffset(Environment.NORMAL, stoneKey, 5);
-        for (int i = 0; i < 10; i++) {
-            ibc.add(Environment.NORMAL, stoneKey);
-        }
+        ibc.add(Environment.NORMAL, stoneKey, 10);
         assertFalse(ibc.isAtLimit(Environment.NORMAL, stoneKey));
     }
 
     @Test
     void testIsAtLimitOverloadWithOffset() {
         ibc.setBlockLimitsOffset(Environment.NORMAL, stoneKey, 5);
-        for (int i = 0; i < 10; i++) {
-            ibc.add(Environment.NORMAL, stoneKey);
-        }
+        ibc.add(Environment.NORMAL, stoneKey, 10);
         // isAtLimit(material, limit) → count(10) >= limit(10) + offset(5) = 15 → false
         assertFalse(ibc.isAtLimit(Environment.NORMAL, stoneKey, 10));
         // count(10) >= limit(5) + offset(5) = 10 → true
@@ -278,9 +272,8 @@ class IslandBlockCountTest {
 
     @Test
     void countsAreEnvIndependent() {
-        ibc.add(Environment.NORMAL, stoneKey);
-        ibc.add(Environment.NORMAL, stoneKey);
-        ibc.add(Environment.NETHER, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 2);
+        ibc.add(Environment.NETHER, stoneKey, 1);
 
         assertEquals(2, ibc.getBlockCount(Environment.NORMAL, stoneKey));
         assertEquals(1, ibc.getBlockCount(Environment.NETHER, stoneKey));
@@ -325,8 +318,7 @@ class IslandBlockCountTest {
 
     @Test
     void testWriteRoundTripWithNamespacedKeys() {
-        ibc.add(Environment.NORMAL, stoneKey);
-        ibc.add(Environment.NORMAL, stoneKey);
+        ibc.add(Environment.NORMAL, stoneKey, 2);
         ibc.setBlockLimit(Environment.NORMAL, NamespacedKey.minecraft("hopper"), 20);
         ibc.setBlockLimitsOffset(Environment.NORMAL, NamespacedKey.minecraft("hopper"), 5);
 

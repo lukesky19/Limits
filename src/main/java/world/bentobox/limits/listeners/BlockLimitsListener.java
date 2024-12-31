@@ -8,18 +8,22 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
-import org.bukkit.Bukkit;
-import org.bukkit.Material;
-import org.bukkit.NamespacedKey;
-import org.bukkit.Registry;
-import org.bukkit.Tag;
-import org.bukkit.World;
+import dev.rosewood.rosestacker.api.RoseStackerAPI;
+import dev.rosewood.rosestacker.event.BlockStackEvent;
+import dev.rosewood.rosestacker.event.BlockUnstackEvent;
+import dev.rosewood.rosestacker.event.SpawnerStackEvent;
+import dev.rosewood.rosestacker.event.SpawnerUnstackEvent;
+import dev.rosewood.rosestacker.stack.StackedBlock;
+import dev.rosewood.rosestacker.stack.StackedSpawner;
+import dev.rosewood.rosestacker.utils.ItemUtils;
+import org.bukkit.*;
 import org.bukkit.World.Environment;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.type.TechnicalPiston;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -40,6 +44,7 @@ import org.bukkit.event.block.LeavesDecayEvent;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.inventory.ItemStack;
 import org.eclipse.jdt.annotation.NonNull;
 import org.eclipse.jdt.annotation.Nullable;
 
@@ -244,7 +249,124 @@ public class BlockLimitsListener implements Listener {
         if (e instanceof BlockMultiPlaceEvent) {
             return;
         }
-        notify(e, User.getInstance(e.getPlayer()), process(e.getBlock(), true), e.getBlock().getType());
+
+        addon.getPlugin().getServer().getScheduler().runTaskLater(addon.getPlugin(), () -> {
+            // Only count the block if it is not a RoseStacker Stacked block
+            if(isBlockNotStacked(e.getBlockPlaced())) {
+                notify(e, User.getInstance(e.getPlayer()), process(e.getBlock(), true), e.getBlock().getType());
+            }
+        }, 1L);
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    public void onBlockStack(BlockStackEvent blockStackEvent) {
+        Player player = blockStackEvent.getPlayer();
+        User user = User.getInstance(player);
+        Block b = blockStackEvent.getStack().getBlock();
+
+        addon.getIslands().getIslandAt(b.getLocation()).ifPresent(i -> {
+            // Get total limit for this block's material or -1 if not limited
+            int totalLimit = getMaterialLimits(b.getWorld(), i.getUniqueId()).getOrDefault(b.getType().getKey(), -1);
+            if(totalLimit == -1) return;
+
+            // Get current block count for the block's material
+            IslandBlockCount ibc = islandCountMap.get(i.getUniqueId());
+            int currentCount = ibc.getBlockCount(b.getType().getKey());
+
+            int potentialCount = currentCount + blockStackEvent.getIncreaseAmount();
+            if(potentialCount > totalLimit) {
+                int remainder = potentialCount - totalLimit;
+                int amountToAdd = totalLimit - currentCount;
+                if(amountToAdd <= 0) {
+                    notify(blockStackEvent, User.getInstance(player), totalLimit, b.getType());
+                    return;
+                }
+
+                blockStackEvent.setIncreaseAmount(amountToAdd);
+
+                // Give a stacked block itemstack for the spawners that didn't fit
+                ItemStack itemStack = ItemUtils.getBlockAsStackedItemStack(b.getType(), remainder);
+
+                user.notify("block-limits.hit-limit-leftover",
+                        "[material]", Util.prettifyText(b.getType().toString()),
+                        TextVariables.NUMBER, String.valueOf(totalLimit));
+
+                HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(itemStack);
+                if(!leftover.isEmpty()) {
+                    for(ItemStack stack : leftover.values()) {
+                        player.getWorld().dropItem(player.getLocation(), stack);
+                    }
+                }
+
+                notify(blockStackEvent, User.getInstance(player), processStacked(b, true, amountToAdd), b.getType());
+            } else {
+                notify(blockStackEvent, User.getInstance(player), processStacked(b, true, blockStackEvent.getIncreaseAmount()), b.getType());
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    public void onBlockUnstack(BlockUnstackEvent blockUnstackEvent) {
+        Player player = blockUnstackEvent.getPlayer();
+        if(player != null) {
+            notify(blockUnstackEvent, User.getInstance(player), processStacked(blockUnstackEvent.getStack().getBlock(), false, blockUnstackEvent.getDecreaseAmount()), blockUnstackEvent.getStack().getBlock().getType());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    public void onSpawnerStack(SpawnerStackEvent spawnerStackEvent) {
+        Player player = spawnerStackEvent.getPlayer();
+        User user = User.getInstance(player);
+        Block b = spawnerStackEvent.getStack().getBlock();
+        StackedSpawner stackedSpawner = spawnerStackEvent.getStack();
+
+        addon.getIslands().getIslandAt(b.getLocation()).ifPresent(i -> {
+            // Get total limit for this block's material or -1 if not limited
+            int totalLimit = getMaterialLimits(b.getWorld(), i.getUniqueId()).getOrDefault(b.getType().getKey(), -1);
+            if(totalLimit == -1) return;
+
+            // Get current block count for the block's material
+            IslandBlockCount ibc = islandCountMap.get(i.getUniqueId());
+            int currentCount = ibc.getBlockCount(b.getType().getKey());
+
+            int potentialCount = currentCount + spawnerStackEvent.getIncreaseAmount();
+            if(potentialCount > totalLimit) {
+                int remainder = potentialCount - totalLimit;
+                int amountToAdd = totalLimit - currentCount;
+                if(amountToAdd <= 0) {
+                    notify(spawnerStackEvent, user, totalLimit, b.getType());
+                    return;
+                }
+
+                spawnerStackEvent.setIncreaseAmount(amountToAdd);
+
+                // Give a stacked spawner itemstack for the spawners that didn't fit
+                ItemStack itemStack = ItemUtils.getSpawnerAsStackedItemStack(stackedSpawner.getStackSettings().getSpawnerType(), remainder);
+
+                user.notify("block-limits.hit-limit-leftover",
+                        "[material]", Util.prettifyText(b.getType().toString()),
+                        TextVariables.NUMBER, String.valueOf(totalLimit));
+
+                HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(itemStack);
+                if(!leftover.isEmpty()) {
+                    for(ItemStack stack : leftover.values()) {
+                        player.getWorld().dropItem(player.getLocation(), stack);
+                    }
+                }
+
+                notify(spawnerStackEvent, user, processStacked(b, true, amountToAdd), b.getType());
+            } else {
+                notify(spawnerStackEvent, user, processStacked(b, true, spawnerStackEvent.getIncreaseAmount()), b.getType());
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    public void onSpawnerUnstack(SpawnerUnstackEvent spawnerUnstackEvent) {
+        Player player = spawnerUnstackEvent.getPlayer();
+        if(player != null) {
+            notify(spawnerUnstackEvent, User.getInstance(player), processStacked(spawnerUnstackEvent.getStack().getBlock(), false, spawnerUnstackEvent.getDecreaseAmount()), spawnerUnstackEvent.getStack().getBlock().getType());
+        }
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
@@ -276,7 +398,11 @@ public class BlockLimitsListener implements Listener {
                 process(block, false);
             }
         }
-        process(b, false);
+
+        if(isBlockNotStacked(b)) {
+            process(b, false);
+        }
+
         if (b.getRelative(BlockFace.UP).getType() == Material.REDSTONE_WIRE
                 || b.getRelative(BlockFace.UP).getType() == Material.REPEATER
                 || b.getRelative(BlockFace.UP).getType() == Material.COMPARATOR
@@ -299,7 +425,7 @@ public class BlockLimitsListener implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
     public void onBlock(BlockMultiPlaceEvent e) {
-        notify(e, User.getInstance(e.getPlayer()), process(e.getBlock(), true), e.getBlock().getType());
+        notify(e, User.getInstance(e.getPlayer()), process(e.getBlockPlaced(), true), e.getBlockPlaced().getType());
     }
 
     private void notify(Cancellable e, User user, int limit, Material m) {
@@ -422,7 +548,6 @@ public class BlockLimitsListener implements Listener {
 
     /**
      * Check if a block can be placed or needs to be removed based on limits.
-     *
      * @return limit amount if over limit, or -1 if no limitation
      */
     private int process(Block b, BlockData blockData, boolean add) {
@@ -440,6 +565,7 @@ public class BlockLimitsListener implements Listener {
                     && i.getCenter().equals(b.getLocation())) {
                 return -1;
             }
+
             islandCountMap.putIfAbsent(id, new IslandBlockCount(id, gameMode));
             NamespacedKey key = fixMaterial(blockData);
             if (add) {
@@ -447,11 +573,63 @@ public class BlockLimitsListener implements Listener {
                 if (limit > -1) {
                     return limit;
                 }
-                islandCountMap.get(id).add(env, key);
+                islandCountMap.get(id).add(env, key, 1);
             } else {
-                islandCountMap.get(id).remove(env, key);
+                islandCountMap.get(id).remove(env, key, 1);
             }
-            updateSaveMap(id);
+
+            updateSaveMap(id, 1);
+            return -1;
+        }).orElse(-1);
+    }
+
+    /**
+     * Check if a block can be
+     *
+     * @param b - block
+     * @param add - true to add a block, false to remove
+     * @param amount - The amount the stacked block increased or decreased
+     * @return limit amount if over limit, or -1 if no limitation
+     */
+    private int processStacked(Block b, boolean add, int amount) {
+        if (DO_NOT_COUNT.contains(fixMaterial(b.getBlockData())) || !addon.inGameModeWorld(b.getWorld())) {
+            return -1;
+        }
+
+        Location blockLocation = b.getLocation();
+        World blockWorld = b.getWorld();
+        World.Environment worldEnvironment = blockWorld.getEnvironment();
+
+        // Check if on island
+        return addon.getIslands().getIslandAt(blockLocation).map(i -> {
+            String id = i.getUniqueId();
+            String gameMode = addon.getGameModeName(blockWorld);
+            if (gameMode.isEmpty()) {
+                // Invalid world
+                return -1;
+            }
+
+            // Ignore the center block - usually bedrock, but for AOneBlock it's the magic block
+            if (addon.getConfig().getBoolean("ignore-center-block", true) && i.getCenter().equals(blockLocation)) {
+                return -1;
+            }
+
+            islandCountMap.putIfAbsent(id, new IslandBlockCount(id, gameMode));
+            if (add) {
+                // Check limit
+                int limit = checkLimit(blockWorld, worldEnvironment, fixMaterial(b.getBlockData()), id);
+                if (limit > -1) {
+                    return limit;
+                }
+
+                islandCountMap.get(id).add(worldEnvironment, fixMaterial(b.getBlockData()), amount);
+            } else {
+                if(islandCountMap.containsKey(id)) {
+                    islandCountMap.get(id).remove(worldEnvironment, fixMaterial(b.getBlockData()), amount);
+                }
+            }
+
+            updateSaveMap(id, amount);
             return -1;
         }).orElse(-1);
     }
@@ -464,16 +642,20 @@ public class BlockLimitsListener implements Listener {
             String id = i.getUniqueId();
             String gameMode = addon.getGameModeName(b.getWorld());
             if (gameMode.isEmpty()) return;
+
+            int amount = getStackedAmount(b);
+
             Environment env = envOf(b.getWorld());
             islandCountMap.computeIfAbsent(id, k -> new IslandBlockCount(id, gameMode))
-                    .remove(env, fixMaterial(b.getBlockData()));
-            updateSaveMap(id);
+                    .remove(env, fixMaterial(b.getBlockData()), 1);
+            updateSaveMap(id, amount);
         });
     }
 
-    private void updateSaveMap(String id) {
+    private void updateSaveMap(String id, int amount) {
         saveMap.putIfAbsent(id, 0);
-        if (saveMap.merge(id, 1, Integer::sum) > CHANGE_LIMIT) {
+
+        if(saveMap.merge(id, amount, Integer::sum) > CHANGE_LIMIT) {
             handler.saveObjectAsync(islandCountMap.get(id));
             saveMap.remove(id);
         }
@@ -565,5 +747,38 @@ public class BlockLimitsListener implements Listener {
     public IslandBlockCount getIsland(Island island) {
         return islandCountMap.computeIfAbsent(island.getUniqueId(),
                 k -> new IslandBlockCount(k, island.getGameMode()));
+    }
+
+    /**
+     * Get the number of blocks or spawners inside a RoseStacker stacked block/spawner.
+     * @param block The Block to check and get the stacked count for.
+     * @return The number of blocks in the stack or 1 if not a stacked block or RoseStacker is not enabled.
+     */
+    private int getStackedAmount(Block block) {
+        if(!addon.isRoseStackersEnabled()) return 1;
+
+        RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+        if(rsAPI.isSpawnerStacked(block)) {
+            StackedSpawner stackedSpawner = rsAPI.getStackedSpawner(block);
+            if(stackedSpawner != null) {
+                return stackedSpawner.getStackSize();
+            }
+        }
+
+        if(rsAPI.isBlockStacked(block)) {
+            StackedBlock stackedBlock = rsAPI.getStackedBlock(block);
+            if(stackedBlock != null) {
+                return stackedBlock.getStackSize();
+            }
+        }
+
+        return 1;
+    }
+
+    private boolean isBlockNotStacked(Block block) {
+        if(!addon.isRoseStackersEnabled()) return true;
+
+        RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+        return !rsAPI.isSpawnerStacked(block) && !rsAPI.isBlockStacked(block);
     }
 }

@@ -28,7 +28,6 @@ import world.bentobox.limits.objects.IslandBlockCount;
 
 /**
  * Addon to BentoBox that monitors and enforces limits.
- *
  * @author tastybento
  */
 public class Limits extends Addon {
@@ -39,6 +38,7 @@ public class Limits extends Addon {
     private List<GameModeAddon> gameModes = new ArrayList<>();
     private BlockLimitsListener blockLimitListener;
     private JoinListener joinListener;
+    private boolean roseStacker = false;
 
     @Override
     public void onDisable() {
@@ -66,6 +66,10 @@ public class Limits extends Addon {
         registerListener(joinListener);
         EntityLimitListener entityLimitListener = new EntityLimitListener(this);
         registerListener(entityLimitListener);
+
+        // Check for RoseStacker
+        if(this.getPlugin().getServer().getPluginManager().isPluginEnabled("RoseStacker")) roseStacker = true;
+
         try {
             Class.forName("io.papermc.paper.event.entity.ShulkerDuplicateEvent");
             registerListener(new PaperShulkerLimitListener(this, entityLimitListener));
@@ -107,6 +111,14 @@ public class Limits extends Addon {
 
     public JoinListener getJoinListener() {
         return joinListener;
+    }
+
+    /**
+     * Checks if RoseStacker is on the server.
+     * @return true if RoseStacker is enabled, false if not.
+     */
+    public boolean isRoseStackersEnabled() {
+        return roseStacker;
     }
 
     /* =========================================================================

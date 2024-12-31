@@ -24,8 +24,10 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.logging.Logger;
 
+import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.PluginManager;
 import org.eclipse.jdt.annotation.NonNull;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -74,6 +76,10 @@ class LimitsTest {
     private Island island;
     @Mock
     private BentoBox plugin;
+    @Mock
+    private Server server;
+    @Mock
+    private PluginManager pluginManager;
     @Mock
     private FlagsManager fm;
     @Mock
@@ -130,6 +136,10 @@ class LimitsTest {
         mockedBentoBox = Mockito.mockStatic(BentoBox.class);
         mockedBentoBox.when(BentoBox::getInstance).thenReturn(plugin);
         when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
+
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getPluginManager()).thenReturn(pluginManager);
+        when(pluginManager.isPluginEnabled("RoseStacker")).thenReturn(true);
 
         // The database type has to be created one line before the thenReturn() to work!
         DatabaseType value = DatabaseType.JSON;

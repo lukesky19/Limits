@@ -12,6 +12,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 
+import dev.rosewood.rosestacker.api.RoseStackerAPI;
+import dev.rosewood.rosestacker.stack.StackedBlock;
+import dev.rosewood.rosestacker.stack.StackedSpawner;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.ChunkSnapshot;
@@ -20,6 +23,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.World.Environment;
+import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.type.Slab;
 import org.bukkit.entity.Entity;
@@ -154,18 +158,24 @@ public class RecountCalculator {
             for (int z = 0; z < 16; z++) {
                 int absZ = chunkBaseZ + z;
                 if (absZ < minZ || absZ >= maxZ) continue;
-                scanColumn(env, chunkSnapshot, x, z, minY, maxY);
+                scanColumn(env, chunk, chunkSnapshot, x, z, minY, maxY);
             }
         }
     }
 
-    private void scanColumn(Environment env, ChunkSnapshot chunkSnapshot, int x, int z, int minY, int maxY) {
-        for (int y = minY; y < maxY; y++) {
+    private void scanColumn(Environment env, Chunk chunk, ChunkSnapshot chunkSnapshot, int x, int z, int minY, int maxY) {
+        for(int y = minY; y < maxY; y++) {
+            Block block = chunk.getBlock(x, y, z);
             BlockData blockData = chunkSnapshot.getBlockData(x, y, z);
-            if (Tag.SLABS.isTagged(blockData.getMaterial())
+            if(Tag.SLABS.isTagged(blockData.getMaterial())
                     && ((Slab) blockData).getType().equals(Slab.Type.DOUBLE)) {
                 checkBlock(env, blockData);
             }
+
+            // RoseStacker Hook
+            if(roseStackerCheckSpawner(block)) continue;
+            if(roseStackerCheckBlock(block)) continue;
+
             checkBlock(env, blockData);
         }
     }
@@ -226,7 +236,7 @@ public class RecountCalculator {
         ibc = bll.getIsland(island);
         // Reset and write per-env block counts
         ibc.clearAllBlockCounts();
-        results.getEnvBlockCount().forEach((env, multiset) -> multiset.forEach(key -> ibc.add(env, key)));
+        results.getEnvBlockCount().forEach((env, multiset) -> multiset.forEach(key -> ibc.add(env, key, 1)));
 
         // Recount entities (loaded only) and write per-env
         scanEntities();
@@ -271,5 +281,42 @@ public class RecountCalculator {
 
     private void handleStackedBlocks() {
         // Stacked-block plugin support is currently disabled; placeholder for future re-enablement.
+    }
+
+    private boolean roseStackerCheckBlock(Block block) {
+        if (addon.isRoseStackersEnabled()) {
+            RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+            if(rsAPI.isBlockStacked(block)) {
+                StackedBlock stackedBlock = rsAPI.getStackedBlock(block);
+                if(stackedBlock != null) {
+                    for(int i = 0; i <= stackedBlock.getStackSize() - 1; i++) {
+                        checkBlock(block.getWorld().getEnvironment(), block.getBlockData());
+                        System.out.println("Counting Stacked Block");
+                    }
+
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean roseStackerCheckSpawner(Block block) {
+        if (addon.isRoseStackersEnabled()) {
+            RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+            if(rsAPI.isSpawnerStacked(block)) {
+                StackedSpawner stackedSpawner = rsAPI.getStackedSpawner(block);
+                if(stackedSpawner != null) {
+                    for(int i = 0; i <= stackedSpawner.getStackSize() - 1; i++) {
+                        checkBlock(block.getWorld().getEnvironment(), block.getBlockData());
+                    }
+
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

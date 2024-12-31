@@ -5,6 +5,7 @@
 
 block-limits:
   hit-limit: "<red>[material] limited to [number]!"
+  hit-limit-leftover: "<red>The limit for [material] was reached ([number])! The remainder was given back to you."
 entity-limits:
   hit-limit: "<red>[entity] spawning limited to [number]!"
 limits:
