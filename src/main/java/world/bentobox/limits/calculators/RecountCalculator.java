@@ -10,6 +10,9 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import dev.rosewood.rosestacker.api.RoseStackerAPI;
+import dev.rosewood.rosestacker.stack.StackedBlock;
+import dev.rosewood.rosestacker.stack.StackedSpawner;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.ChunkSnapshot;
@@ -18,6 +21,7 @@ import org.bukkit.Material;
 import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.World.Environment;
+import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.type.Slab;
 import org.bukkit.scheduler.BukkitTask;
@@ -100,6 +104,7 @@ public class RecountCalculator {
             results.mdCount.add(md);
         }
     }
+
     /**
      * Get a set of all the chunks in island
      * @param island - island
@@ -167,25 +172,49 @@ public class RecountCalculator {
         Util.getChunkAtAsync(world, p.x, p.z, world.getEnvironment().equals(Environment.NETHER)).thenAccept(chunk -> {
             if (chunk != null) {
                 chunkList.add(chunk);
-                // roseStackerCheck(chunk);
+                //roseStackerCheck(chunk);
             }
             loadChunks(r2, world, pairList, chunkList); // Iteration
         });
     }
-    /*
-    private void roseStackerCheck(Chunk chunk) {
+
+    private boolean roseStackerCheckBlock(Block block) {
         if (addon.isRoseStackersEnabled()) {
-            RoseStackerAPI.getInstance().getStackedBlocks(Collections.singletonList(chunk)).forEach(e -> {
-                // Blocks below sea level can be scored differently
-                boolean belowSeaLevel = seaHeight > 0 && e.getLocation().getY() <= seaHeight;
-                // Check block once because the base block will be counted in the chunk snapshot
-                for (int _x = 0; _x < e.getStackSize() - 1; _x++) {
-                    checkBlock(e.getBlock().getType(), belowSeaLevel);
+            RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+            if(rsAPI.isBlockStacked(block)) {
+                StackedBlock stackedBlock = rsAPI.getStackedBlock(block);
+                if(stackedBlock != null) {
+                    for(int i = 0; i <= stackedBlock.getStackSize() - 1; i++) {
+                        checkBlock(block.getBlockData());
+                        System.out.println("Counting Stacked Block");
+                    }
+
+                    return true;
                 }
-            });
+            }
         }
+
+        return false;
     }
-     */
+
+    private boolean roseStackerCheckSpawner(Block block) {
+        if (addon.isRoseStackersEnabled()) {
+            RoseStackerAPI rsAPI = RoseStackerAPI.getInstance();
+            if(rsAPI.isSpawnerStacked(block)) {
+                StackedSpawner stackedSpawner = rsAPI.getStackedSpawner(block);
+                if(stackedSpawner != null) {
+                    for(int i = 0; i <= stackedSpawner.getStackSize() - 1; i++) {
+                        checkBlock(block.getBlockData());
+                    }
+
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Count the blocks on the island
      * @param chunk chunk to scan
@@ -197,29 +226,40 @@ public class RecountCalculator {
             if (chunkSnapshot.getX() * 16 + x < island.getMinProtectedX() || chunkSnapshot.getX() * 16 + x >= island.getMinProtectedX() + island.getProtectionRange() * 2) {
                 continue;
             }
+
             for (int z = 0; z < 16; z++) {
                 // Check if the block coordinate is inside the protection zone and if not, don't count it
                 if (chunkSnapshot.getZ() * 16 + z < island.getMinProtectedZ() || chunkSnapshot.getZ() * 16 + z >= island.getMinProtectedZ() + island.getProtectionRange() * 2) {
                     continue;
                 }
+
                 // Only count to the highest block in the world for some optimization
                 for (int y = chunk.getWorld().getMinHeight(); y < chunk.getWorld().getMaxHeight(); y++) {
+                    Block block = chunk.getBlock(x, y, z);
                     BlockData blockData = chunkSnapshot.getBlockData(x, y, z);
                     // Slabs can be doubled, so check them twice
                     if (Tag.SLABS.isTagged(blockData.getMaterial())) {
                         Slab slab = (Slab)blockData;
                         if (slab.getType().equals(Slab.Type.DOUBLE)) {
                             checkBlock(blockData);
+                            continue;
                         }
                     }
+
+                    // RoseStacker Hook
+                    if(roseStackerCheckSpawner(block)) continue;
+                    if(roseStackerCheckBlock(block)) continue;
+
+                    // Add the value of the block's material
+                    checkBlock(blockData);
+
+
                     // Hook for Wild Stackers (Blocks Only) - this has to use the real chunk
                     /*
                     if (addon.isStackersEnabled() && blockData.getMaterial() == Material.CAULDRON) {
                         stackedBlocks.add(new Location(chunk.getWorld(), x + chunkSnapshot.getX() * 16,y,z + chunkSnapshot.getZ() * 16));
                     }
                      */
-                    // Add the value of the block's material
-                    checkBlock(blockData);
                 }
             }
         }
@@ -235,11 +275,15 @@ public class RecountCalculator {
         if (chunks == null || chunks.isEmpty()) {
             return CompletableFuture.completedFuture(false);
         }
+
         // Count blocks in chunk
         CompletableFuture<Boolean> result = new CompletableFuture<>();
 
         Bukkit.getScheduler().runTaskAsynchronously(BentoBox.getInstance(), () -> {
-            chunks.forEach(chunk -> scanAsync(chunk));
+            chunks.forEach(chunk -> {
+                scanAsync(chunk);
+                //roseStackerCheckChunk(chunk);
+            });
             Bukkit.getScheduler().runTask(addon.getPlugin(),() -> result.complete(true));
         });
         return result;
@@ -255,6 +299,7 @@ public class RecountCalculator {
             // This should not be needed, but just in case
             return CompletableFuture.completedFuture(false);
         }
+
         // Retrieve and remove from the queue
         Queue<Pair<Integer, Integer>> pairList = new ConcurrentLinkedQueue<>();
         int i = 0;
@@ -291,7 +336,10 @@ public class RecountCalculator {
             ibc = new IslandBlockCount(island.getUniqueId(), addon.getPlugin().getIWM().getAddon(world).map(a -> a.getDescription().getName()).orElse("default"));
         }
         ibc.getBlockCounts().clear();
-        results.getMdCount().forEach(ibc::add);
+        results.getMdCount().forEach(material -> {
+            System.out.println("Adding to count: " + material.name());
+            ibc.add(material);
+        });
         bll.setIsland(island.getUniqueId(), ibc);
         //Bukkit.getScheduler().runTask(addon.getPlugin(), () -> sender.sendMessage("admin.limits.calc.finished"));
 
@@ -304,6 +352,7 @@ public class RecountCalculator {
             if (!Bukkit.isPrimaryThread()) {
                 addon.getPlugin().logError("scanChunk not on Primary Thread!");
             }
+
             // Timeout check
             if (System.currentTimeMillis() - pipeliner.getInProcessQueue().get(this) > CALCULATION_TIMEOUT * 60000) {
                 // Done
@@ -312,6 +361,7 @@ public class RecountCalculator {
                 addon.logError("Level calculation timed out after " + CALCULATION_TIMEOUT + "m for island: " + getIsland());
                 return;
             }
+
             if (Boolean.TRUE.equals(r) && !pipeliner.getTask().isCancelled()) {
                 // scanNextChunk returns true if there are more chunks to scan
                 scanIsland(pipeliner);
@@ -320,7 +370,7 @@ public class RecountCalculator {
                 pipeliner.getInProcessQueue().remove(this);
                 // Chunk finished
                 // This was the last chunk
-                handleStackedBlocks();
+                //handleStackedBlocks();
                 long checkTime = System.currentTimeMillis();
                 finishTask = Bukkit.getScheduler().runTaskTimer(addon.getPlugin(), () -> {
                     // Check every half second if all the chests and stacks have been cleared

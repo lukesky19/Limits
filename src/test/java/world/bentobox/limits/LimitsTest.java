@@ -82,6 +82,10 @@ public class LimitsTest {
     @Mock
     private BentoBox plugin;
     @Mock
+    private Server server;
+    @Mock
+    private PluginManager pluginManager;
+    @Mock
     private FlagsManager fm;
     @Mock
     private GameModeAddon gameMode;
@@ -140,6 +144,10 @@ public class LimitsTest {
         // Set up plugin
         Whitebox.setInternalState(BentoBox.class, "instance", plugin);
         when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
+
+        when(plugin.getServer()).thenReturn(server);
+        when(server.getPluginManager()).thenReturn(pluginManager);
+        when(pluginManager.isPluginEnabled("RoseStacker")).thenReturn(true);
 
         // The database type has to be created one line before the thenReturn() to work!
         DatabaseType value = DatabaseType.JSON;
